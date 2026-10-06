@@ -320,3 +320,65 @@ export function docBounds(doc: Doc, view: ViewId): Rect | null {
   const x = Math.min(...rs.map((r) => r.x)), y = Math.min(...rs.map((r) => r.y));
   return { x, y, w: Math.max(...rs.map((r) => r.x + r.w)) - x, h: Math.max(...rs.map((r) => r.y + r.h)) - y };
 }
+
+/** Convert every ratsnest line in `view` into a wire (L-shaped in schematic view). */
+export function autoroute(doc: Doc, view: ViewId, color: string): Doc {
+  const full = computeNets(doc, 'all');
+  const local = computeNets(doc, view);
+  const { lines } = ratsnest(doc, view, full, local);
+  if (!lines.length) return doc;
+  return produce(doc, (d) => {
+    for (const l of lines) {
+      const bends: Pt[] = view === 'sch' && l.x1 !== l.x2 && l.y1 !== l.y2 ? [{ x: l.x2, y: l.y1 }] : [];
+      d.wires.push({
+        id: uid(),
+        view,
+        ends: [
+          { x: l.x1, y: l.y1, attach: { part: l.a.part, conn: l.a.conn } },
+          { x: l.x2, y: l.y2, attach: { part: l.b.part, conn: l.b.conn } },
+        ],
+        bends,
+        color,
+      });
+    }
+  });
+}
+
+/** Placement that puts connector `conn` of a part at world point `at` with rotation `rot`. */
+export function placementForPin(type: string, view: ViewId, conn: string, at: Pt, rot = 0): Placement {
+  const g = geom(getDef(type), view)!;
+  const r = rotatePt(g.pins[conn], g.pivot, rot);
+  return { x: at.x - r.x, y: at.y - r.y, rot };
+}
+
+/** Copy of selected items with fresh ids, offset by (dx, dy) in `view`; wires keep attachments inside the copy. */
+export function cloneItems(doc: Doc, parts: PartInstance[], wires: Wire[], view: ViewId, dx: number, dy: number): { parts: PartInstance[]; wires: Wire[] } {
+  const idMap = new Map<string, string>();
+  const scratch = clone(doc);
+  const outParts: PartInstance[] = [];
+  for (const p of parts) {
+    const def = getDef(p.type);
+    const copy: PartInstance = clone(p);
+    copy.id = uid();
+    copy.label = nextLabel(scratch, def.labelPrefix);
+    scratch.parts.push(copy);
+    idMap.set(p.id, copy.id);
+    copy[view] = { ...copy[view], x: copy[view].x + dx, y: copy[view].y + dy };
+    const other: ViewId = view === 'bb' ? 'sch' : 'bb';
+    if (geom(def, other)) copy[other] = findFreeSpot(scratch, other, copy, copy[other]);
+    outParts.push(copy);
+  }
+  const outWires: Wire[] = [];
+  for (const w of wires) {
+    const copy: Wire = clone(w);
+    copy.id = uid();
+    if (w.view === view)
+      for (const p of [...copy.ends, ...copy.bends]) {
+        p.x += dx;
+        p.y += dy;
+      }
+    for (const e of copy.ends) if (e.attach) e.attach = idMap.has(e.attach.part) ? { ...e.attach, part: idMap.get(e.attach.part)! } : undefined;
+    outWires.push(copy);
+  }
+  return { parts: outParts, wires: outWires };
+}

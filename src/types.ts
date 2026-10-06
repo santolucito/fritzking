@@ -66,6 +66,13 @@ export interface PartSimState {
   on?: boolean;
   burnt?: boolean;
   level?: number; // 0..1 generic intensity
+  /** Per-tag currents for multi-channel parts (e.g. RGB LED). */
+  channels?: Record<string, number>;
+}
+
+export interface SimEnv {
+  /** Milliseconds since the simulation started. */
+  t: number;
 }
 
 export interface RenderCtx {
@@ -105,7 +112,7 @@ export interface PartDef {
   isBreadboard?: boolean;
   /** Short value text shown next to the label in schematic view. */
   valueText?: (inst: PartInstance) => string;
-  sim?: (inst: PartInstance) => SimElement[];
+  sim?: (inst: PartInstance, env: SimEnv) => SimElement[];
   /** Interaction while simulating (e.g. pressing a button). */
   simToggle?: { key: string; values: [string, string]; momentary?: boolean };
 }

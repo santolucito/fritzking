@@ -2,6 +2,7 @@ import type { Doc, PartSimState, SimElement } from './types';
 import type { Nets } from './model';
 import { nodeKey } from './model';
 import { PARTS } from './parts';
+import { arduinoActive } from './parts/components';
 
 export interface SimResult {
   /** Voltage per net root (relative to ground). */
@@ -46,7 +47,7 @@ function solve(A: number[][], b: number[]): number[] | null {
 }
 
 /** DC operating-point simulation using modified nodal analysis with piecewise-linear diodes. */
-export function simulate(doc: Doc, nets: Nets): SimResult {
+export function simulate(doc: Doc, nets: Nets, t = 0): SimResult {
   const warnings: string[] = [];
   const bound: Bound[] = [];
   const roots: string[] = [];
@@ -56,7 +57,7 @@ export function simulate(doc: Doc, nets: Nets): SimResult {
   for (const inst of doc.parts) {
     const def = PARTS[inst.type];
     if (!def?.sim) continue;
-    for (const el of def.sim(inst)) {
+    for (const el of def.sim(inst, { t })) {
       const terms: Record<string, string> =
         el.kind === 'R' ? { a: el.a, b: el.b } : el.kind === 'V' ? { p: el.p, n: el.n } : el.kind === 'D' ? { a: el.a, k: el.k } : { b: el.b, c: el.c, e: el.e };
       const rootsOf: Record<string, string> = {};
@@ -162,20 +163,21 @@ export function simulate(doc: Doc, nets: Nets): SimResult {
   roots.forEach((r, i) => netVoltage.set(r, v[i]));
 
   const parts = new Map<string, PartSimState>();
-  const add = (id: string, cur: number, pow: number) => {
+  const add = (id: string, cur: number, pow: number, tag?: string) => {
     const s = parts.get(id) ?? { current: undefined, power: 0 };
     if (s.current === undefined) s.current = cur;
     s.power = (s.power ?? 0) + pow;
+    if (tag) (s.channels ??= {})[tag] = cur;
     parts.set(id, s);
   };
   for (const b of bound) {
     const el = b.el;
     if (el.kind === 'R') {
       const i = (V(b.n.a) - V(b.n.b)) / el.r;
-      add(b.part, i, i * i * el.r);
+      add(b.part, i, i * i * el.r, el.tag);
     } else if (el.kind === 'V') {
       const i = (el.v - (V(b.n.p) - V(b.n.n))) / el.r; // current delivered
-      add(b.part, i, i * el.v);
+      add(b.part, i, i * el.v, el.tag);
       if (Math.abs(i) > 3) {
         const inst = doc.parts.find((p) => p.id === b.part);
         warnings.push(`Short circuit! ${inst?.label ?? 'A source'} is delivering ${i.toFixed(1)}A.`);
@@ -187,7 +189,7 @@ export function simulate(doc: Doc, nets: Nets): SimResult {
       if (el.kind === 'Q') {
         const ic = qOn.get(b) ? (V(b.n.c) - V(b.n.e)) / 2 : 0;
         add(b.part, ic, ic * (V(b.n.c) - V(b.n.e)));
-      } else add(b.part, i, i * vd);
+      } else add(b.part, i, i * vd, el.tag);
     }
   }
 
@@ -202,6 +204,17 @@ export function simulate(doc: Doc, nets: Nets): SimResult {
         s.burnt = true;
         warnings.push(`${inst.label} is drawing ${(cur * 1000).toFixed(0)}mA and burnt out — add a current-limiting resistor.`);
       }
+    } else if (inst.type === 'rgb-led') {
+      const ch = s.channels ?? {};
+      const max = Math.max(...Object.values(ch), 0);
+      s.level = Math.min(1, max / 0.015);
+      s.on = max > 1e-4;
+      if (max > 0.05) {
+        s.burnt = true;
+        warnings.push(`${inst.label} is drawing ${(max * 1000).toFixed(0)}mA on one channel and burnt out — add a current-limiting resistor.`);
+      }
+    } else if (inst.type === 'arduino-uno') {
+      s.on = arduinoActive(inst, t);
     } else if (inst.type === 'buzzer') s.level = cur > 0.003 ? 1 : 0;
     else if (inst.type === 'motor') s.level = Math.min(1, cur / 0.15);
     else if (inst.type === 'resistor' && (s.power ?? 0) > 0.25) warnings.push(`${inst.label} dissipates ${(s.power ?? 0).toFixed(2)}W (rated 0.25W) — it would overheat.`);

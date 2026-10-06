@@ -236,6 +236,107 @@ const led: PartDef = {
   },
 };
 
+/* ---------------- RGB LED ---------------- */
+
+const RGB_CH: { id: string; name: string; c: string; vf: number }[] = [
+  { id: 'r', name: 'Red', c: '#e5332a', vf: 2.0 },
+  { id: 'g', name: 'Green', c: '#2bb84a', vf: 3.0 },
+  { id: 'b', name: 'Blue', c: '#2f6fe8', vf: 3.0 },
+];
+
+function mixRgb(ch: Record<string, number> | undefined): { color: string; level: number } {
+  const lv = (id: string) => Math.min(1, ((ch?.[id] ?? 0) / 0.015));
+  const r = lv('r'), g = lv('g'), b = lv('b');
+  const level = Math.max(r, g, b);
+  if (level < 0.02) return { color: '#ffffff', level: 0 };
+  const n = (v: number) => Math.round(40 + 215 * (v / level));
+  return { color: `rgb(${n(r)},${n(g)},${n(b)})`, level };
+}
+
+const rgbLed: PartDef = {
+  type: 'rgb-led',
+  title: 'RGB LED',
+  category: 'Output',
+  description: 'Common-cathode RGB LED (legs: R, cathode, G, B). Each colour needs its own resistor.',
+  labelPrefix: 'LED',
+  props: [],
+  connectors: [
+    { id: 'r', name: 'Red (+)' },
+    { id: 'k', name: 'Cathode (−)' },
+    { id: 'g', name: 'Green (+)' },
+    { id: 'b', name: 'Blue (+)' },
+  ],
+  valueText: () => 'RGB',
+  sim: () => RGB_CH.map((c) => ({ kind: 'D' as const, a: c.id, k: 'k', vf: c.vf, rs: 12, tag: c.id })),
+  bb: {
+    pins: { r: pt(0, 0), k: pt(1, 0), g: pt(2, 0), b: pt(3, 0) },
+    pivot: pt(1, 0),
+    bounds: { x: u(-0.6), y: u(-3.8), w: u(4.2), h: u(4) },
+    render: (inst, ctx) => {
+      const { color, level } = mixRgb(ctx.sim?.burnt ? undefined : ctx.sim?.channels);
+      const gid = `rgbg-${inst.id}`;
+      return (
+        <g>
+          <defs>
+            <radialGradient id={gid}>
+              <stop offset="0%" stopColor="#fff" stopOpacity={0.9} />
+              <stop offset="40%" stopColor={color} stopOpacity={0.6} />
+              <stop offset="100%" stopColor={color} stopOpacity={0} />
+            </radialGradient>
+          </defs>
+          <Lead pts={[[0, 0], [0, u(-0.5)], [u(0.95), u(-0.9)], [u(0.95), u(-1.3)]]} />
+          <Lead pts={[[u(1), 0], [u(1), u(-0.4)], [u(1.25), u(-0.9)], [u(1.25), u(-1.3)]]} />
+          <Lead pts={[[u(2), 0], [u(2), u(-0.4)], [u(1.75), u(-0.9)], [u(1.75), u(-1.3)]]} />
+          <Lead pts={[[u(3), 0], [u(3), u(-0.5)], [u(2.05), u(-0.9)], [u(2.05), u(-1.3)]]} />
+          {level > 0.02 && <circle cx={u(1.5)} cy={u(-2.5)} r={u(1.4 + 1.8 * level)} fill={`url(#${gid})`} opacity={0.4 + 0.6 * level} />}
+          <rect x={u(0.7)} y={u(-1.6)} width={u(1.6)} height={u(0.32)} rx={2} fill={ctx.sim?.burnt ? '#3b3330' : '#d8dad6'} />
+          <path
+            d={`M${u(0.85)} ${u(-1.6)} V${u(-2.9)} A${u(0.65)} ${u(0.65)} 0 0 1 ${u(2.15)} ${u(-2.9)} V${u(-1.6)} Z`}
+            fill={ctx.sim?.burnt ? '#3b3330' : level > 0.02 ? color : '#e9ebe6'}
+            stroke="#9a9d98"
+            strokeWidth={0.8}
+            opacity={0.95}
+          />
+          <path d={`M${u(1.02)} ${u(-1.75)} V${u(-2.85)} A${u(0.5)} ${u(0.5)} 0 0 1 ${u(1.4)} ${u(-3.35)}`} stroke="#fff" strokeWidth={2} fill="none" opacity={0.6} strokeLinecap="round" />
+          {level < 0.02 && !ctx.sim?.burnt && (
+            <g opacity={0.5}>
+              <circle cx={u(1.2)} cy={u(-2.5)} r={3} fill="#e5332a" />
+              <circle cx={u(1.5)} cy={u(-2.1)} r={3} fill="#2bb84a" />
+              <circle cx={u(1.8)} cy={u(-2.5)} r={3} fill="#2f6fe8" />
+            </g>
+          )}
+        </g>
+      );
+    },
+  },
+  sch: {
+    pins: { r: pt(0, -1), g: pt(0, 0), b: pt(0, 1), k: pt(5, 0) },
+    pivot: pt(2, 0),
+    bounds: { x: 0, y: u(-1.8), w: u(5), h: u(3.2) },
+    render: (_i, ctx) => {
+      const lit = !ctx.sim?.burnt;
+      return (
+        <g>
+          {RGB_CH.map((c, i) => {
+            const on = lit && (ctx.sim?.channels?.[c.id] ?? 0) > 1e-4;
+            return (
+              <g key={c.id} transform={`translate(0 ${u(i - 1)})`}>
+                <line x1={0} y1={0} x2={u(1.2)} y2={0} {...SCH} />
+                <DiodeSymbol x0={u(1.2)} x1={u(2.2)} fill={on ? c.c : undefined} />
+                <line x1={u(2.2)} y1={0} x2={u(3.2)} y2={0} {...SCH} />
+                <text x={u(0.35)} y={-4} fontSize={8} fill="#6b6f75">{c.name[0]}</text>
+              </g>
+            );
+          })}
+          <line x1={u(3.2)} y1={u(-1)} x2={u(3.2)} y2={u(1)} {...SCH} />
+          <line x1={u(3.2)} y1={0} x2={u(5)} y2={0} {...SCH} />
+          <Arrow x={u(2.6)} y={u(-1.5)} dx={8} dy={-8} />
+          <Arrow x={u(3.1)} y={u(-1.5)} dx={8} dy={-8} />
+        </g>
+      );
+    },
+  },
+};
 /* ---------------- Diode ---------------- */
 
 const diode: PartDef = {
@@ -785,7 +886,7 @@ const motor: PartDef = {
     pins: { p0: pt(0, 0), p1: pt(2, 0) },
     pivot: pt(1, 0),
     bounds: { x: u(-1.8), y: u(-5.8), w: u(5.6), h: u(6) },
-    render: (inst, ctx) => {
+    render: (_inst, ctx) => {
       const lvl = ctx.sim?.level ?? 0;
       const dir = (ctx.sim?.current ?? 0) >= 0 ? 'normal' : 'reverse';
       return (
@@ -804,8 +905,8 @@ const motor: PartDef = {
             <ellipse cx={u(1.9)} cy={u(-5)} rx={u(0.9)} ry={u(0.28)} fill="#e65b3a" />
             <circle cx={u(1)} cy={u(-5)} r={3} fill="#555" />
           </g>
-          <text x={u(1)} y={u(-2.4)} fontSize={9} textAnchor="middle" fill="#55595f" fontFamily="system-ui" fontWeight={700}>
-            {inst.label}
+          <text x={u(1)} y={u(-2.4)} fontSize={8} textAnchor="middle" fill="#55595f" fontFamily="system-ui" fontWeight={700}>
+            DC
           </text>
         </g>
       );
@@ -902,21 +1003,33 @@ function highPins(inst: PartInstance): Set<string> {
   );
 }
 
+const BLINK_MODES: Record<string, number> = { 'Pins steady HIGH': 0, 'Blink (1 Hz)': 1000, 'Blink (4 Hz)': 250 };
+
+/** Whether the Arduino's HIGH pins are currently driven, given the simulated sketch and time. */
+export function arduinoActive(inst: PartInstance, t: number): boolean {
+  const period = BLINK_MODES[inst.props.sketch] ?? 0;
+  return period === 0 || Math.floor(t / (period / 2)) % 2 === 0;
+}
+
 const arduino: PartDef = {
   type: 'arduino-uno',
   title: 'Arduino Uno',
   category: 'Microcontrollers',
-  description: 'Arduino Uno (Rev3). In the simulator it supplies 5V/3.3V and drives the pins listed under “HIGH pins”.',
+  description: 'Arduino Uno (Rev3). In the simulator it supplies 5V/3.3V and drives the pins listed under “HIGH pins”, steadily or blinking.',
   labelPrefix: 'Arduino',
-  props: [{ key: 'high', label: 'HIGH pins', kind: 'text', default: '13', hint: 'Digital pins driven HIGH (5V) in the simulator, e.g. "13, 9"' }],
+  props: [
+    { key: 'high', label: 'HIGH pins', kind: 'text', default: '13', hint: 'Digital pins driven HIGH (5V) in the simulator, e.g. "13, 9"' },
+    { key: 'sketch', label: 'Simulated sketch', kind: 'select', options: Object.keys(BLINK_MODES), default: 'Pins steady HIGH' },
+  ],
   connectors: [...UNO_TOP, ...UNO_BOT].map(([id]) => ({ id, name: pinLabel(id) })),
   buses: [['GND1', 'GND2', 'GND3']],
-  sim: (inst) => {
+  sim: (inst, env) => {
     const els: ReturnType<NonNullable<PartDef['sim']>> = [
       { kind: 'V', p: '5V', n: 'GND1', v: 5, r: 0.05, tag: '5V' },
       { kind: 'V', p: '3V3', n: 'GND1', v: 3.3, r: 0.5, tag: '3V3' },
     ];
-    for (const pin of highPins(inst)) if (unoPins[pin] && /^[DA]\d+$/.test(pin)) els.push({ kind: 'V', p: pin, n: 'GND1', v: 5, r: 25, tag: pin });
+    if (arduinoActive(inst, env.t))
+      for (const pin of highPins(inst)) if (unoPins[pin] && /^[DA]\d+$/.test(pin)) els.push({ kind: 'V', p: pin, n: 'GND1', v: 5, r: 25, tag: pin });
     return els;
   },
   bb: {
@@ -925,6 +1038,7 @@ const arduino: PartDef = {
     bounds: { x: u(-1.2), y: 0, w: u(28.2), h: u(21) },
     render: (inst, ctx) => {
       const hi = highPins(inst);
+      const active = ctx.simulating && ctx.sim?.on !== false;
       const header = (from: number, to: number, y: number) => (
         <rect x={u(from - 0.5)} y={u(y - 0.5)} width={u(to - from + 1)} height={u(1)} fill="#1a1a1b" rx={1} />
       );
@@ -959,12 +1073,12 @@ const arduino: PartDef = {
           </text>
           <text x={u(14)} y={u(11.4)} fontSize={7} fill="#cfe9eb" textAnchor="middle">DIGITAL (PWM ~)</text>
           {/* status LEDs */}
-          <rect x={u(9)} y={u(4)} width={u(0.7)} height={u(0.45)} fill={hi.has('D13') && ctx.simulating ? '#ffd23a' : '#d9c58b'} />
+          <rect x={u(9)} y={u(4)} width={u(0.7)} height={u(0.45)} fill={hi.has('D13') && active ? '#ffd23a' : '#d9c58b'} />
           <text x={u(10.1)} y={u(4.4)} fontSize={6} fill="#fff">L</text>
           <rect x={u(24.6)} y={u(10.4)} width={u(0.7)} height={u(0.45)} fill={ctx.simulating ? '#5dff6b' : '#9bc59f'} />
           <text x={u(24.5)} y={u(10.3)} fontSize={6} fill="#fff" textAnchor="end">ON</text>
           {ctx.simulating && <circle cx={u(24.95)} cy={u(10.6)} r={8} fill="#5dff6b" opacity={0.35} />}
-          {hi.has('D13') && ctx.simulating && <circle cx={u(9.35)} cy={u(4.2)} r={8} fill="#ffd23a" opacity={0.4} />}
+          {hi.has('D13') && active && <circle cx={u(9.35)} cy={u(4.2)} r={8} fill="#ffd23a" opacity={0.4} />}
           {header(8, 17, 1)}
           {header(19, 26, 1)}
           {header(10, 16, 20)}
@@ -1009,6 +1123,7 @@ export const components: PartDef[] = [
   diode,
   npn,
   led,
+  rgbLed,
   buzzer,
   motor,
   pushbutton,

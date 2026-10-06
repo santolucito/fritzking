@@ -11,6 +11,10 @@ const PATHS: Record<string, string> = {
   stop: 'M6 6h12v12H6z',
   bb: 'M3 6h18v12H3z M6 9h.01 M9 9h.01 M12 9h.01 M15 9h.01 M18 9h.01 M6 15h.01 M9 15h.01 M12 15h.01 M15 15h.01 M18 15h.01',
   sch: 'M2 12h4l2-4 3 8 3-8 2 4h6',
+  examples: 'M4 4h7v7H4z M13 4h7v7h-7z M4 13h7v7H4z M13 13h7v7h-7z',
+  label: 'M3 7h11l5 5-5 5H3z M7 12h.01',
+  route: 'M4 4h4v4H4z M16 16h4v4h-4z M8 6h6v10h2',
+  help: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .9-1 1.7 M12 17h.01',
 };
 
 export function Icon({ name }: { name: string }) {

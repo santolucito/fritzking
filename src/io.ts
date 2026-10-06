@@ -1,6 +1,6 @@
 import type { Doc, PartInstance, ViewId, Wire } from './types';
 import { P } from './types';
-import { computeNets, docBounds, nodeKey, reattach, uid } from './model';
+import { computeNets, docBounds, nodeKey, placementForPin, reattach, uid } from './model';
 import { PARTS, getDef } from './parts';
 
 const STORAGE_KEY = 'fritzking.doc.v1';
@@ -147,47 +147,215 @@ export function bomCsv(doc: Doc): string {
   return ['Qty,Part,Value,Labels', ...[...rows.values()].map((r) => [r.labels.length, esc(r.title), esc(r.value), esc(r.labels.join(' '))].join(','))].join('\n') + '\n';
 }
 
-/* ---------------- Example sketch ---------------- */
+/* ---------------- Share links ---------------- */
 
-export function exampleDoc(): Doc {
-  const g = (n: number) => n * P;
-  const part = (type: string, label: string, bb: [number, number, number], sch: [number, number, number], props: Record<string, string> = {}): PartInstance => {
+const b64url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const unb64url = (s: string) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+
+async function pipeBytes(bytes: Uint8Array, stream: { readable: ReadableStream; writable: WritableStream }): Promise<Uint8Array> {
+  const w = stream.writable.getWriter();
+  void w.write(new Uint8Array(bytes));
+  void w.close();
+  return new Uint8Array(await new Response(stream.readable).arrayBuffer());
+}
+
+/** Compact, URL-safe encoding of a sketch for the location hash. */
+export async function encodeShare(doc: Doc): Promise<string> {
+  const raw = new TextEncoder().encode(JSON.stringify({ parts: doc.parts, wires: doc.wires }));
+  if (typeof CompressionStream === 'undefined') return `j.${b64url(raw)}`;
+  return `d.${b64url(await pipeBytes(raw, new CompressionStream('deflate-raw')))}`;
+}
+
+export async function decodeShare(s: string): Promise<Doc> {
+  const [kind, data] = s.split('.');
+  let bytes: Uint8Array = unb64url(data);
+  if (kind === 'd') bytes = await pipeBytes(bytes, new DecompressionStream('deflate-raw'));
+  return deserialize(new TextDecoder().decode(bytes));
+}
+
+/* ---------------- Example sketches ---------------- */
+
+type Row = 'a' | 'b' | 'c' | 'd' | 'e' | 'f' | 'g' | 'h' | 'i' | 'j' | 'tp' | 'tn' | 'bn' | 'bp';
+const ROW_Y: Record<Row, number> = { a: 4, b: 5, c: 6, d: 7, e: 8, f: 11, g: 12, h: 13, i: 14, j: 15, tp: 1, tn: 2, bn: 17, bp: 18 };
+
+/** Grid position (in P units) of a hole on a breadboard placed at the origin. */
+const hole = (col: number, row: Row): [number, number] => [col + 1, ROW_Y[row]];
+
+const RED = '#cc1414', BLK = '#404040', YEL = '#ffe24d', GRN = '#47cc79', BLU = '#418dd9';
+
+class Sketch {
+  doc: Doc = { parts: [], wires: [] };
+  private g = (n: number) => n * P;
+
+  part(type: string, label: string, bb: [number, number, number], sch: [number, number, number], props: Record<string, string> = {}): PartInstance {
     const def = getDef(type);
     const all: Record<string, string> = {};
     for (const pd of def.props) all[pd.key] = pd.default;
-    return {
+    const inst: PartInstance = {
       id: uid(),
       type,
       label,
       props: { ...all, ...props },
-      bb: { x: g(bb[0]), y: g(bb[1]), rot: bb[2] },
-      sch: { x: g(sch[0]), y: g(sch[1]), rot: sch[2] },
+      bb: { x: this.g(bb[0]), y: this.g(bb[1]), rot: bb[2] },
+      sch: { x: this.g(sch[0]), y: this.g(sch[1]), rot: sch[2] },
     };
-  };
-  const board = part('breadboard-half', 'BB1', [0, 0, 0], [0, 0, 0]);
-  const bat = part('battery', 'VCC1', [-4, 21, 0], [0, 0, 90], { voltage: '9V' });
-  const btn = part('pushbutton', 'S1', [6, 8, 0], [4, -6, 0]);
-  const led = part('led', 'LED1', [8, 6, 0], [8, -2, 90], { color: 'Red' });
-  const res = part('resistor', 'R1', [7, 10, 90], [8, 4, 90], { resistance: '470Ω' });
-  const wire = (x1: number, y1: number, x2: number, y2: number, color: string, bends: [number, number][] = []): Wire => ({
-    id: uid(),
-    view: 'bb',
-    ends: [{ x: g(x1), y: g(y1) }, { x: g(x2), y: g(y2) }],
-    bends: bends.map(([x, y]) => ({ x: g(x), y: g(y) })),
-    color,
-  });
-  const doc: Doc = {
-    parts: [board, bat, btn, led, res],
-    wires: [
-      wire(-4, 21, 3, 18, '#cc1414', [[-4, 23], [3, 23]]),
-      wire(-3, 21, 2, 17, '#404040', [[-3, 22], [2, 22]]),
-      wire(6, 18, 6, 15, '#cc1414'),
-      wire(9, 15, 9, 17, '#404040'),
-    ],
-  };
-  reattach(doc);
-  return doc;
+    this.doc.parts.push(inst);
+    return inst;
+  }
+
+  /** Place a part so that connector `conn` sits in breadboard hole (col,row). */
+  onBoard(type: string, label: string, conn: string, col: number, row: Row, rot: number, sch: [number, number, number], props: Record<string, string> = {}) {
+    const [hx, hy] = hole(col, row);
+    const pl = placementForPin(type, 'bb', conn, { x: this.g(hx), y: this.g(hy) }, rot);
+    return this.part(type, label, [pl.x / P, pl.y / P, rot], sch, props);
+  }
+
+  wire(view: ViewId, pts: [number, number][], color: string) {
+    const w: Wire = {
+      id: uid(),
+      view,
+      ends: [
+        { x: this.g(pts[0][0]), y: this.g(pts[0][1]) },
+        { x: this.g(pts[pts.length - 1][0]), y: this.g(pts[pts.length - 1][1]) },
+      ],
+      bends: pts.slice(1, -1).map(([x, y]) => ({ x: this.g(x), y: this.g(y) })),
+      color,
+    };
+    this.doc.wires.push(w);
+    return w;
+  }
+
+  /** Breadboard jumper between two holes, optionally via bend points (grid units). */
+  jump(a: [number, Row], b: [number, Row], color: string, via: [number, number][] = []) {
+    return this.wire('bb', [hole(a[0], a[1]), ...via, hole(b[0], b[1])], color);
+  }
+
+  sch(pts: [number, number][]) {
+    return this.wire('sch', pts, '#2b2d31');
+  }
+
+  /** 9V-style battery below the board, wired to the bottom rails. */
+  battery(voltage: string, sch: [number, number, number]) {
+    this.part('battery', 'VCC1', [-4, 21, 0], sch, { voltage });
+    this.wire('bb', [[-4, 21], [-4, 23], [3, 23], hole(2, 'bp')], RED);
+    this.wire('bb', [[-3, 21], [-3, 22], [2, 22], hole(1, 'bn')], BLK);
+  }
+
+  done(): Doc {
+    reattach(this.doc);
+    return this.doc;
+  }
 }
+
+export interface Example {
+  id: string;
+  title: string;
+  blurb: string;
+  build: () => Doc;
+}
+
+export const EXAMPLES: Example[] = [
+  {
+    id: 'button-led',
+    title: 'Button & LED',
+    blurb: 'Press the button to light an LED through a 470Ω resistor.',
+    build: () => {
+      const s = new Sketch();
+      s.part('breadboard-half', 'BB1', [0, 0, 0], [0, 0, 0]);
+      s.battery('9V', [0, 0, 90]);
+      s.onBoard('pushbutton', 'S1', 'a1', 5, 'e', 0, [4, -6, 0]);
+      s.onBoard('led', 'LED1', 'a', 7, 'c', 0, [8, -2, 90], { color: 'Red' });
+      s.onBoard('resistor', 'R1', 'p0', 8, 'e', 90, [8, 4, 90], { resistance: '470Ω' });
+      s.jump([5, 'bp'], [5, 'j'], RED);
+      s.jump([8, 'j'], [8, 'bn'], BLK);
+      return s.done();
+    },
+  },
+  {
+    id: 'dimmer',
+    title: 'Dimmer',
+    blurb: 'A potentiometer sets the LED brightness. Drag the Position slider while simulating.',
+    build: () => {
+      const s = new Sketch();
+      s.part('breadboard-half', 'BB1', [0, 0, 0], [0, 0, 0]);
+      s.battery('9V', [0, 4, 90]);
+      s.onBoard('potentiometer', 'R1', 'p1', 10, 'f', 0, [4, 0, 0], { resistance: '10kΩ', position: '25' });
+      s.onBoard('resistor', 'R2', 'p0', 11, 'i', 0, [10, 4, 90], { resistance: '220Ω' });
+      s.onBoard('led', 'LED1', 'a', 15, 'g', 0, [10, 9, 90], { color: 'Green' });
+      s.jump([10, 'j'], [10, 'bp'], RED);
+      s.jump([12, 'j'], [13, 'bn'], BLK);
+      s.jump([16, 'j'], [16, 'bn'], BLK);
+      s.sch([[2, 2], [2, 0], [4, 0]]);
+      s.sch([[6, 2], [12, 2]]);
+      s.sch([[12, 6], [12, 7]]);
+      s.sch([[12, 11], [12, 13], [8, 13]]);
+      s.sch([[8, 13], [2, 13], [2, 6]]);
+      s.sch([[8, 0], [8, 13]]);
+      return s.done();
+    },
+  },
+  {
+    id: 'arduino-motor',
+    title: 'Arduino motor switch',
+    blurb: 'Pin 13 drives an NPN transistor that switches a motor. The simulated sketch blinks once a second.',
+    build: () => {
+      const s = new Sketch();
+      s.part('breadboard-half', 'BB1', [0, 0, 0], [0, 0, 0]);
+      s.part('arduino-uno', 'Arduino1', [0, 24, 0], [0, 0, 0], { high: '13', sketch: 'Blink (1 Hz)' });
+      s.onBoard('npn', 'Q1', 'B', 5, 'f', 0, [16, 13, 0]);
+      s.onBoard('resistor', 'R1', 'p0', 1, 'i', 0, [12, 13, 0], { resistance: '1kΩ' });
+      s.onBoard('motor', 'M1', 'p0', 11, 'h', 0, [16, 7, 270]);
+      s.wire('bb', [[12, 25], [12, 23], [2, 23], hole(1, 'j')], YEL);
+      s.wire('bb', [[11, 25], [11, 21], [9, 21], hole(8, 'bn')], BLK);
+      s.jump([4, 'j'], [4, 'bn'], BLK);
+      s.jump([6, 'j'], [11, 'j'], BLU);
+      s.jump([13, 'j'], [13, 'bp'], RED);
+      s.wire('bb', [[13, 44], [13, 46], [29, 46], [29, 21], [15, 21], hole(14, 'bp')], RED);
+      s.sch([[10, 13], [12, 13]]);
+      s.sch([[18, 9], [18, 11]]);
+      s.sch([[0, 1], [-2, 1], [-2, -3], [18, -3], [18, 5]]);
+      s.sch([[18, 15], [18, 17], [5, 17]]);
+      return s.done();
+    },
+  },
+  {
+    id: 'night-light',
+    title: 'Night light',
+    blurb: 'A photocell and 10kΩ divider bias a transistor: the LED turns on when it gets dark. Drag the Light level slider.',
+    build: () => {
+      const s = new Sketch();
+      s.part('breadboard-half', 'BB1', [0, 0, 0], [0, 0, 0]);
+      s.battery('6V', [0, 3, 90]);
+      s.onBoard('photocell', 'R1', 'p0', 4, 'a', 0, [6, 7, 270], { light: '35' });
+      s.onBoard('resistor', 'R2', 'p0', 5, 'c', 0, [6, 1, 270], { resistance: '10kΩ' });
+      s.onBoard('npn', 'Q1', 'B', 7, 'f', 0, [12, 4, 0]);
+      s.onBoard('led', 'LED1', 'a', 12, 'g', 0, [12, -3, 90], { color: 'Yellow' });
+      s.onBoard('resistor', 'R3', 'p0', 12, 'i', 0, [12, -9, 270], { resistance: '220Ω' });
+      // rail bridges on the right-hand end
+      s.jump([28, 'tp'], [28, 'bp'], RED);
+      s.jump([29, 'tn'], [29, 'bn'], BLK);
+      s.jump([4, 'e'], [2, 'tn'], BLK, [[3, 8]]);
+      s.jump([9, 'a'], [9, 'tp'], RED);
+      s.jump([5, 'e'], [7, 'j'], GRN);
+      s.jump([6, 'j'], [7, 'bn'], BLK);
+      s.jump([8, 'j'], [13, 'j'], BLU);
+      s.jump([16, 'j'], [16, 'bp'], RED);
+      s.sch([[2, 1], [2, -13], [8, -13]]);
+      s.sch([[8, -13], [14, -13], [14, -11]]);
+      s.sch([[8, -1], [8, -13]]);
+      s.sch([[2, 5], [2, 11], [8, 11]]);
+      s.sch([[8, 9], [8, 11]]);
+      s.sch([[8, 11], [14, 11], [14, 6]]);
+      s.sch([[8, 3], [8, 5]]);
+      s.sch([[8, 5], [10, 5], [10, 4], [12, 4]]);
+      s.sch([[14, -1], [14, 2]]);
+      s.sch([[14, -7], [14, -5]]);
+      return s.done();
+    },
+  },
+];
+
+export const exampleDoc = () => EXAMPLES[0].build();
 
 export function connectionsOf(doc: Doc, inst: PartInstance) {
   const nets = computeNets(doc, 'all');

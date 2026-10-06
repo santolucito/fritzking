@@ -663,3 +663,98 @@ kbd {
   margin-bottom: 6px;
   line-height: 1.4;
 }
+
+/* ---------- context menu, labels, examples, help ---------- */
+.menu.ctx {
+  position: absolute;
+  top: auto;
+  left: auto;
+  min-width: 200px;
+}
+.menu button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.menu button.danger {
+  color: var(--danger);
+}
+.ctx-colors {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 5px;
+  padding: 4px 6px;
+}
+.ctx-colors .swatch {
+  height: 20px;
+  padding: 0;
+}
+.menu.examples {
+  min-width: 300px;
+}
+.menu.examples button {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.menu.examples small {
+  color: var(--muted);
+  line-height: 1.3;
+}
+.tool.active {
+  background: #e3efe9;
+  border-color: #b7d3c7;
+  color: var(--accent);
+}
+.bb-label {
+  font-size: 9px;
+  font-weight: 600;
+  fill: #30353b;
+  font-family: system-ui, sans-serif;
+  paint-order: stroke;
+  stroke: #e4e7e3;
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+.modal-back {
+  position: fixed;
+  inset: 0;
+  background: #0006;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.modal {
+  background: #fff;
+  border-radius: 12px;
+  width: min(560px, 92vw);
+  max-height: 88vh;
+  overflow: auto;
+  padding: 18px 22px 22px;
+  box-shadow: 0 20px 60px #0004;
+}
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.modal h2 {
+  margin: 0;
+  font-size: 18px;
+}
+.modal p {
+  line-height: 1.5;
+  color: #3b4148;
+}
+.shortcuts {
+  width: 100%;
+  border-collapse: collapse;
+}
+.shortcuts td {
+  padding: 5px 4px;
+  border-top: 1px solid var(--line);
+  vertical-align: top;
+}
+.shortcuts td:first-child {
+  width: 46%;
+}

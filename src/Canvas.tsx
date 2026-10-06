@@ -38,6 +38,15 @@ interface Props {
   wireColor: string;
   onCursor: (p: Pt | null) => void;
   svgRef: React.RefObject<SVGSVGElement | null>;
+  showLabels: boolean;
+  onContextMenu: (info: ContextInfo) => void;
+}
+
+export interface ContextInfo {
+  sx: number;
+  sy: number;
+  world: Pt;
+  target: { kind: 'part' | 'wire' | 'empty'; id?: string };
 }
 
 type Drag =
@@ -202,13 +211,13 @@ export default function Canvas(props: Props) {
     const L = latest.current;
     const target = e.target as Element;
     const w = toWorld(e);
-    svgRef.current!.setPointerCapture(e.pointerId);
-
     if (e.button === 1 || (e.button === 0 && space)) {
+      svgRef.current!.setPointerCapture(e.pointerId);
       setDrag({ kind: 'pan', sx: e.clientX, sy: e.clientY, vp: L.viewport });
       return;
     }
     if (e.button !== 0) return;
+    svgRef.current!.setPointerCapture(e.pointerId);
 
     const endEl = target.closest('[data-wire-end]');
     const bendEl = target.closest('[data-bend]');
@@ -363,6 +372,11 @@ export default function Canvas(props: Props) {
             const wi = doc.wires.find((x) => x.id === d.wire)!;
             wi.ends[d.end].x = p.x;
             wi.ends[d.end].y = p.y;
+            // New schematic wires are drawn as an L; hold Alt for a straight diagonal.
+            if (d.created && L.view === 'sch') {
+              const a = wi.ends[0];
+              wi.bends = !e.altKey && a.x !== p.x && a.y !== p.y ? [{ x: p.x, y: a.y }] : [];
+            }
           }),
         );
         break;
@@ -458,6 +472,22 @@ export default function Canvas(props: Props) {
     }
   };
 
+  const onContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const L = latest.current;
+    const target = document.elementFromPoint(e.clientX, e.clientY) ?? (e.target as Element);
+    const wireEl = target.closest('[data-wire], [data-wire-end], [data-bend]');
+    const partEl = target.closest('[data-part]');
+    const r = svgRef.current!.getBoundingClientRect();
+    let hit: ContextInfo['target'] = { kind: 'empty' };
+    if (wireEl) {
+      const id = wireEl.getAttribute('data-wire') ?? (wireEl.getAttribute('data-wire-end') ?? wireEl.getAttribute('data-bend') ?? '').split(':')[0];
+      hit = { kind: 'wire', id };
+    } else if (partEl) hit = { kind: 'part', id: partEl.getAttribute('data-part')! };
+    if (hit.id && !L.selection.has(hit.id)) L.setSelection(new Set([hit.id]));
+    L.onContextMenu({ sx: e.clientX - r.left, sy: e.clientY - r.top, world: toWorld(e), target: hit });
+  };
+
   const onDragOver = (e: React.DragEvent) => {
     if (e.dataTransfer.types.includes('application/x-fritz-part')) {
       e.preventDefault();
@@ -525,7 +555,7 @@ export default function Canvas(props: Props) {
           props.onCursor(null);
         }}
         onDoubleClick={onDoubleClick}
-        onContextMenu={(e) => e.preventDefault()}
+        onContextMenu={onContextMenu}
       >
         <defs>
           <pattern id={`grid-${view}`} width={P} height={P} patternUnits="userSpaceOnUse">
@@ -612,6 +642,20 @@ export default function Canvas(props: Props) {
               </g>
             );
           })}
+
+          {/* breadboard part labels (above wires so they stay readable) */}
+          {view === 'bb' &&
+            props.showLabels &&
+            parts
+              .filter((p) => !PARTS[p.type].isBreadboard)
+              .map((inst) => {
+                const b = partBounds(inst, 'bb')!;
+                return (
+                  <text key={inst.id} x={b.x + b.w / 2} y={b.y + b.h + 11} className="bb-label" textAnchor="middle" pointerEvents="none">
+                    {inst.label}
+                  </text>
+                );
+              })}
 
           {/* schematic junction dots (3+ connections at a point) */}
           {view === 'sch' && <Junctions wires={wires} pins={derived.pins} />}
